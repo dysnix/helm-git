@@ -180,18 +180,28 @@ main() {
 
   _raw_uri=$(echo "$_raw_uri" | sed 's/^git+//')
 
+  # clean up for Helm3
+  readonly helm_repo_uri=$(echo "git+$_raw_uri" | sed -E 's#/index.yaml##')
+
   git_proto=$(echo "$_raw_uri" | cut -d':' -f1)
   readonly git_proto=$git_proto
   string_contains "$allowed_protocols" "$git_proto" ||
     error "$error_invalid_protocol"
 
   git_repo=$(echo "$_raw_uri" | sed -E 's#^([^/]+//[^/]+[^@\?]+)@?[^@\?]+\??.*$#\1#')
+
+
+  if [ "$git_proto" = "ssh" ]; then
+    git_repo=$(echo "${git_repo#ssh://}" | sed -E 's#([^/]+)/(.*)#\1:\2#')
+  fi
   readonly git_repo=$git_repo
+
+
   # TODO: Validate git_repo
-  git_path=$(echo "$_raw_uri" | sed -E 's#.*@([^\?]+)\/([^\?]+).*(\?.*)?#\1#')
+  git_path=$(echo "$_raw_uri" | sed -En 's/.*@(.*)\?.*/\1/; {p}')
   readonly git_path=$git_path
-  # TODO: Validate git_path
-  helm_file=$(echo "$_raw_uri" | sed -E 's#.*@([^\?]+)\/([^\?]+).*(\?.*)?#\2#')
+
+  helm_file=$(basename "$git_path")
   readonly helm_file=$helm_file
 
   git_ref=$(echo "$_raw_uri" | sed '/^.*ref=\([^&#]*\).*$/!d;s//\1/')
@@ -208,9 +218,8 @@ main() {
   helm_depupdate=$(echo "$_raw_uri" | sed '/^.*depupdate=\([^&#]*\).*$/!d;s//\1/')
   [ -z "$helm_depupdate" ] && helm_depupdate=1
 
-  debug "repo: $git_repo ref: $git_ref path: $git_path file: $helm_file sparse: $git_sparse depupdate: $helm_depupdate"
-  readonly helm_repo_uri="git+$git_repo@$git_path?ref=$git_ref&sparse=$git_sparse&depupdate=$helm_depupdate"
   debug "helm_repo_uri: $helm_repo_uri"
+  debug "repo: $git_repo ref: $git_ref path: $git_path file: $helm_file sparse: $git_sparse depupdate: $helm_depupdate"
 
   # Setup cleanup trap
   cleanup() {
@@ -252,9 +261,11 @@ main() {
       helm_home=$helm_home_target_path
     fi
     helm_args="$helm_args --home=$helm_home"
-  fi
+    chart_search_root="$git_sub_path"
+  else
 
-  chart_search_root="$git_sub_path"
+    chart_search_root="$(dirname "$git_sub_path")"
+  fi
 
   chart_search=$(find "$chart_search_root" -maxdepth 2 -name "Chart.yaml" -print)
   chart_search_count=$(echo "$chart_search" | wc -l)
